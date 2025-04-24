@@ -1,5 +1,7 @@
 # Drupal 11 Starter for Non-Composer Hosting
 
+> **⚠️ NOTICE**: This project will soon be migrated to a DDEV addon to make it more easily distributable and independent from Drupal. This migration will allow for easier integration into any project and simplify maintenance.
+
 This repository contains a **Drupal 11** project configured for **local development using DDEV**, with custom commands to simplify deployment on **shared hosting environments** that do **not support Composer**.
 
 ---
