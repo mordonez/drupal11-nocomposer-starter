@@ -1,0 +1,185 @@
+#!/bin/bash
+## Description: Uploads the optimized Drupal site to the shared hosting server
+## Usage: upload --host=HOSTNAME --user=USERNAME --dir=REMOTE_DIR [--password=PASSWORD] [--delete] [--exclude="path1,path2"]
+## Example: ddev upload --host=example.com --user=myuser --dir=/public_html
+## ExtraFlags: [--host] [--user] [--dir] [--port] [--password] [--delete] [--exclude]
+
+# Help function
+show_help() {
+  echo "Usage: ddev upload --host=HOSTNAME --user=USERNAME --dir=REMOTE_DIR [OPTIONS]"
+  echo ""
+  echo "Transfers the optimized Drupal site to the shared hosting server."
+  echo ""
+  echo "Required Parameters:"
+  echo "  --host=HOST         Remote server hostname"
+  echo "  --user=USERNAME     SFTP username"
+  echo "  --dir=DIRECTORY     Remote directory path"
+  echo ""
+  echo "Optional Parameters:"
+  echo "  --port=PORT         SFTP port (default: 22)"
+  echo "  --password=PASS     Password (if not provided, it will be requested interactively)"
+  echo "  --delete            Delete remote files that don't exist locally"
+  echo "  --exclude=PATH1,... Comma-separated list of files/folders to exclude"
+  echo "  --help              Show this help and exit"
+  echo ""
+  echo "Examples:"
+  echo "  ddev upload --host=example.com --user=myuser --dir=/public_html"
+  echo "  ddev upload --host=example.com --user=myuser --dir=/public_html --delete"
+  echo "  ddev upload --host=example.com --user=myuser --dir=/public_html --exclude=vendor,tmp"
+  echo "  ddev upload --host=example.com --user=myuser --dir=/public_html --fix-perms"
+  echo ""
+  echo "Note: For passwords with special characters, use single quotes:"
+  echo "  ddev upload --password='my?password!&'"
+  exit 0
+}
+
+# Handle interruptions
+trap 'echo "❌ Script interrupted"; exit 1' SIGINT SIGTERM
+
+# Default values
+DEFAULT_LFTP_PORT="22"
+DEFAULT_LFTP_PROTOCOL="sftp"
+DELETE_REMOTE_FILES=false
+CUSTOM_EXCLUDES=""
+# Project location inside the container
+PROJECT_ROOT="/var/www/html"
+BUILD_DIR="${PROJECT_ROOT}/public_html"
+
+# Arguments processing including password
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --help|-h)
+      show_help
+      ;;
+    --host=*)
+      LFTP_HOST="${1#*=}"
+      shift
+      ;;
+    --user=*)
+      LFTP_USER="${1#*=}"
+      shift
+      ;;
+    --dir=*)
+      LFTP_REMOTE_DIR="${1#*=}"
+      shift
+      ;;
+    --port=*)
+      LFTP_PORT="${1#*=}"
+      shift
+      ;;
+    --password=*)
+      LFTP_PASSWORD="${1#*=}"
+      shift
+      ;;
+    --delete)
+      DELETE_REMOTE_FILES=true
+      shift
+      ;;
+    --exclude=*)
+      CUSTOM_EXCLUDES="${1#*=}"
+      shift
+      ;;
+    *)
+      echo "❌ Unknown argument: $1"
+      exit 1
+      ;;
+  esac
+done
+
+# Check required parameters
+if [ -z "$LFTP_HOST" ]; then
+    echo "❌ Error: Missing required parameter --host"
+    echo "Run 'ddev upload --help' for usage information"
+    exit 1
+fi
+
+if [ -z "$LFTP_USER" ]; then
+    echo "❌ Error: Missing required parameter --user"
+    echo "Run 'ddev upload --help' for usage information"
+    exit 1
+fi
+
+if [ -z "$LFTP_REMOTE_DIR" ]; then
+    echo "❌ Error: Missing required parameter --dir"
+    echo "Run 'ddev upload --help' for usage information"
+    exit 1
+fi
+
+# Configure final variables
+LFTP_PASSWORD=${LFTP_PASSWORD:-""}
+LFTP_PORT=${LFTP_PORT:-$DEFAULT_LFTP_PORT}
+LFTP_PROTOCOL=${DEFAULT_LFTP_PROTOCOL}
+
+# Verify requirements
+if ! command -v lftp &> /dev/null; then
+    echo "❌ Error: The 'lftp' command is not installed. Please install lftp to continue."
+    exit 1
+fi
+
+# Check if public_html exists
+if [ ! -d "$BUILD_DIR" ]; then
+    echo "❌ Error: The directory $BUILD_DIR does not exist. Run ddev build first."
+    exit 1
+fi
+
+echo "🚀 Preparing upload to $LFTP_HOST as $LFTP_USER..."
+
+# Add host to known_hosts to avoid prompts
+echo "🔑 Adding host to known_hosts..."
+mkdir -p ~/.ssh
+ssh-keyscan -H $LFTP_HOST >> ~/.ssh/known_hosts 2>/dev/null
+
+# Default exclusions
+EXCLUDE_LIST=(
+  "'sites/default/files/'"
+  "'sites/default/files.dev/'"
+  "'private'"
+  "'sites/default/private/'"
+  "'sites/default/tmp/'"
+  "'sites/default/settings*.php'"
+  "'sites/default/services*.yml'"
+)
+
+# Process custom exclusions if any
+if [ -n "$CUSTOM_EXCLUDES" ]; then
+    echo "🔧 Adding custom exclusions: $CUSTOM_EXCLUDES"
+    IFS=',' read -ra CUSTOM_ARRAY <<< "$CUSTOM_EXCLUDES"
+    for item in "${CUSTOM_ARRAY[@]}"; do
+        # Remove whitespace and add to the list
+        item=$(echo "$item" | xargs)
+        EXCLUDE_LIST+=("'$item'")
+    done
+fi
+
+# Create exclusion string
+EXCLUDE_STRING=""
+for exclude in "${EXCLUDE_LIST[@]}"; do
+    EXCLUDE_STRING+="--exclude $exclude "
+done
+
+# Configure delete flag based on selected option
+if [ "$DELETE_REMOTE_FILES" = true ]; then
+    echo "⚠️ WARNING: Remote files that don't exist locally will be deleted (--delete)"
+    DELETE_FLAG="-e"
+else
+    DELETE_FLAG=""
+fi
+
+# Prepare LFTP command
+MIRROR_CMD="mirror $DELETE_FLAG -R -P 4 --verbose $EXCLUDE_STRING ${BUILD_DIR}/ ${LFTP_REMOTE_DIR}"
+
+if [ -z "$LFTP_PASSWORD" ]; then
+    echo "⚠️ Requesting password interactively..."
+    lftp -e "$MIRROR_CMD; bye" -u "$LFTP_USER" "$LFTP_PROTOCOL://$LFTP_HOST:$LFTP_PORT"
+else
+    echo "🔄 Starting file transfer with automatic authentication..."
+    lftp -e "$MIRROR_CMD; bye" -u "$LFTP_USER,$LFTP_PASSWORD" "$LFTP_PROTOCOL://$LFTP_HOST:$LFTP_PORT"
+fi
+
+# Check if the transfer was successful
+if [ $? -eq 0 ]; then
+    echo "✅ Upload completed successfully!"
+else
+    echo "❌ Error during file transfer."
+    exit 1
+fi
