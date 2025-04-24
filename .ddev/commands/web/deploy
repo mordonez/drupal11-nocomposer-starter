@@ -1,0 +1,32 @@
+#!/bin/bash
+## Description: Builds and uploads the Drupal site to a shared hosting in a single step
+## Usage: deploy [--host=HOSTNAME] [--user=USERNAME] [--dir=REMOTE_DIR] [--password=PASSWORD] [--delete] [--exclude="path1,path2"]
+## Example: ddev deploy
+## ExtraFlags: [--host] [--user] [--dir] [--port] [--password] [--delete] [--exclude]
+
+echo "🚀 Starting complete deployment process..."
+
+# Run build first (using local command)
+echo "📦 Executing build..."
+cd /var/www/html
+
+# Execute the build script directly
+/var/www/html/.ddev/commands/web/build
+
+# If build was successful, execute upload
+if [ $? -eq 0 ]; then
+    echo "✅ Build completed successfully. Proceeding with upload..."
+
+    # Execute the upload script directly with all passed arguments
+    /var/www/html/.ddev/commands/web/upload "$@"
+
+    if [ $? -eq 0 ]; then
+        echo "🎉 Complete deployment finished successfully!"
+    else
+        echo "❌ Upload failed, but build completed successfully."
+        exit 1
+    fi
+else
+    echo "❌ Build failed, upload will not proceed."
+    exit 1
+fi

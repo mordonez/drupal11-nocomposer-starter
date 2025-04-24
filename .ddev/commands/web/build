@@ -1,0 +1,88 @@
+#!/bin/bash
+# filepath: .ddev/commands/web/build
+## Description: Generates an optimized version of the Drupal site for shared hosting without Composer
+## Usage: build
+## Example: ddev build
+
+echo "🏗️ Starting build process..."
+
+# Project location inside the container
+PROJECT_ROOT="/var/www/html"
+BUILD_DIR="${PROJECT_ROOT}/public_html"
+SOURCE_DIR="${PROJECT_ROOT}/web"
+
+echo "Cleaning $BUILD_DIR..."
+rm -rf $BUILD_DIR
+
+# Create public_html directory if it doesn't exist
+if [ ! -d "$BUILD_DIR" ]; then
+    mkdir -p "$BUILD_DIR"
+fi
+
+# Copy necessary files
+echo "📂 Copying files from $SOURCE_DIR to $BUILD_DIR"
+rsync -av --exclude="sites/default/files/" "$SOURCE_DIR/" "$BUILD_DIR/"
+
+# Create a modified copy of autoload.php for UB
+echo "Creating modified autoload.php..."
+cat $PROJECT_ROOT/web/autoload.php | \
+sed 's|/../vendor/autoload.php|/vendor/autoload.php|g' \
+> $BUILD_DIR/autoload.php
+
+# Create a modified copy of composer.json to install dependencies correctly
+echo "Creating modified composer.json..."
+cat $PROJECT_ROOT/composer.json | \
+# Change web-root to ./
+sed 's/"web-root": "web\/"/"web-root": ".\/"/g' | \
+# Remove web/ from installer-paths routes
+sed 's|"web/core"|"core"|g' | \
+sed 's|"web/libraries/{$name}"|"libraries/{$name}"|g' | \
+sed 's|"web/modules/contrib/{$name}"|"modules/contrib/{$name}"|g' | \
+sed 's|"web/profiles/contrib/{$name}"|"profiles/contrib/{$name}"|g' | \
+sed 's|"web/themes/contrib/{$name}"|"themes/contrib/{$name}"|g' | \
+sed 's|"web/modules/custom/{$name}"|"modules/custom/{$name}"|g' | \
+sed 's|"web/profiles/custom/{$name}"|"profiles/custom/{$name}"|g' | \
+sed 's|"web/themes/custom/{$name}"|"themes/custom/{$name}"|g' \
+> $BUILD_DIR/composer.json
+
+# Install composer dependencies
+composer install --no-dev --optimize-autoloader --working-dir=$BUILD_DIR
+
+echo "Removing unnecessary files..."
+rm $BUILD_DIR/sites/default/settings.ddev.php
+rm $BUILD_DIR/composer.json
+rm $BUILD_DIR/composer.lock
+rm $BUILD_DIR/INSTALL.txt
+rm $BUILD_DIR/README.md
+rm $BUILD_DIR/.csslintrc
+rm $BUILD_DIR/.editorconfig
+rm $BUILD_DIR/.gitattributes
+rm $BUILD_DIR/.eslintignore
+rm $BUILD_DIR/.eslintrc.json
+rm $BUILD_DIR/example.gitignore
+
+echo "✅ Build completed successfully!"
+echo "📂 Generated files are in ${BUILD_DIR}"
+
+# Set appropriate permissions for Drupal directories with "others" read enabled
+echo "🔒 Setting correct permissions for Drupal directories with 'others' read access..."
+find $BUILD_DIR -type d -exec chmod 755 {} \;  # rwxr-xr-x for directories
+find $BUILD_DIR -type f -exec chmod 644 {} \;  # rw-r--r-- for files
+
+# Special permissions for files directory and its contents
+find $BUILD_DIR/sites -type d -name files -exec chmod 775 {} \;
+find $BUILD_DIR/sites -path "*/files/*" -type d -exec chmod 775 {} \;
+find $BUILD_DIR/sites -path "*/files/*" -type f -exec chmod 664 {} \;
+
+# Extra protection for settings files
+chmod 640 $BUILD_DIR/sites/*/settings*.php 2>/dev/null || true
+chmod 640 $BUILD_DIR/sites/*/services*.yml 2>/dev/null || true
+
+echo "✅ Build completed successfully!"
+echo "📂 Generated files are in ${BUILD_DIR}"
+echo "🔒 Permissions have been set with 'others' read access enabled:"
+echo "   - Directories: 755 (rwxr-xr-x)"
+echo "   - Files: 644 (rw-r--r--)"
+echo "   - Files directories: 775 (rwxrwxr-x)"
+echo "   - Files in files directories: 664 (rw-rw-r--)"
+echo "   - Configuration files: 640 (rw-r-----)"
